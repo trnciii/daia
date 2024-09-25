@@ -1,0 +1,27 @@
+ColumnLimit: 0
+IndentWidth: 2
+ContinuationIndentWidth: 2
+
+BinPackArguments: false
+BinPackParameters: false
+AllowAllArgumentsOnNextLine: false
+KeepEmptyLinesAtTheStartOfBlocks: true
+AlignAfterOpenBracket: DontAlign
+PenaltyBreakBeforeFirstCallParameter: 0
+BreakBeforeTernaryOperators: true
+AlignOperands: false
+BreakBeforeBraces: Custom
+BraceWrapping:
+  BeforeElse: true
+  AfterControlStatement: true
+  AfterFunction: true
+  AfterClass: true
+  AfterStruct: true
+  AfterEnum: true
+  AfterNamespace: false
+CompactNamespaces: true
+Cpp11BracedListStyle: false
+
+PointerAlignment: Left
+ReferenceAlignment: Left
+IndentCaseLabels: true
