@@ -35,6 +35,17 @@ struct SetupInfo
 	{
 		deviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
 
+		deviceExtensions.push_back(VK_KHR_VIDEO_QUEUE_EXTENSION_NAME);
+		deviceExtensions.push_back(VK_KHR_VIDEO_DECODE_QUEUE_EXTENSION_NAME);
+
+		// deviceExtensions.push_back(VK_KHR_VIDEO_DECODE_H265_EXTENSION_NAME);
+		// deviceExtensions.push_back(VK_STD_VULKAN_VIDEO_CODEC_H265_DECODE_EXTENSION_NAME);
+
+		deviceExtensions.push_back(VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME);
+		// deviceExtensions.push_back(VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_EXTENSION_NAME);
+
+		instanceExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+
 		if(enableValidationLayers)
 		{
 			layers.push_back("VK_LAYER_KHRONOS_validation");
@@ -243,6 +254,7 @@ public:
 		};
 
 		_instance = vk::createInstance({
+			.flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR,
 			.pApplicationInfo = &appInfo,
 			.enabledLayerCount = static_cast<uint32_t>(info.layers.size()),
 			.ppEnabledLayerNames = info.layers.data(),
@@ -316,6 +328,8 @@ public:
 			});
 
 			_grpahicsQueue = _device.getQueue(_queueFamilyIndex, 0);
+
+			_loader = vk::DispatchLoaderDynamic(_instance, vkGetInstanceProcAddr, _device, vkGetDeviceProcAddr);
 		}
 
 		// command buffer
@@ -657,6 +671,93 @@ public:
 			.pBufferInfo = &bufferInfo,
 		};
 		_device.updateDescriptorSets(1, &write, 0, nullptr);
+
+		// for each video
+		{
+			// video buffer
+			const auto h265ProfileInfo = vk::VideoDecodeH265ProfileInfoKHR{
+				.stdProfileIdc = STD_VIDEO_H265_PROFILE_IDC_MAIN_10,
+			};
+			const auto h264ProfileInfo = vk::VideoDecodeH264ProfileInfoKHR{
+				.stdProfileIdc = STD_VIDEO_H264_PROFILE_IDC_BASELINE,
+			};
+			const auto h265profile = vk::VideoProfileInfoKHR{
+				.pNext = &h265ProfileInfo,
+				.videoCodecOperation = vk::VideoCodecOperationFlagBitsKHR::eDecodeH265,
+				.chromaSubsampling = vk::VideoChromaSubsamplingFlagBitsKHR::e420,
+				.lumaBitDepth = vk::VideoComponentBitDepthFlagBitsKHR::e8,
+				.chromaBitDepth = vk::VideoComponentBitDepthFlagBitsKHR::e8,
+			};
+			const auto h264profile = vk::VideoProfileInfoKHR{
+				.pNext = &h264ProfileInfo,
+				.videoCodecOperation = vk::VideoCodecOperationFlagBitsKHR::eDecodeH264,
+				.chromaSubsampling = vk::VideoChromaSubsamplingFlagBitsKHR::e420,
+				.lumaBitDepth = vk::VideoComponentBitDepthFlagBitsKHR::e8,
+				.chromaBitDepth = vk::VideoComponentBitDepthFlagBitsKHR::e8,
+			};
+
+			const auto list = vk::VideoProfileListInfoKHR{
+				.profileCount = 1,
+				.pProfiles = &h264profile,
+			};
+
+			_videoBuffer = _device.createBuffer({
+				.pNext = &list,
+				.size = 1000000, // to be determined reasonably
+				.usage = vk::BufferUsageFlagBits::eTransferSrc
+					| vk::BufferUsageFlagBits::eVideoDecodeSrcKHR,
+			}, nullptr, _loader);
+
+			vk::MemoryRequirements requirements = _device.getBufferMemoryRequirements(_videoBuffer, _loader);
+			_videoBufferMemory = _device.allocateMemory({
+				.allocationSize = requirements.size,
+				.memoryTypeIndex = findMemoryType(
+					_physicalDevice,
+					requirements.memoryTypeBits,
+					vk::MemoryPropertyFlagBits::eHostCoherent)
+			}, nullptr, _loader);
+
+			const auto h265Prop = vk::ExtensionProperties{
+				.extensionName = vk::ArrayWrapper1D<char, 256>(std::string_view(VK_STD_VULKAN_VIDEO_CODEC_H265_DECODE_EXTENSION_NAME)),
+				.specVersion = 1,
+			};
+
+			const auto h264Prop = vk::ExtensionProperties{
+				.extensionName = vk::ArrayWrapper1D<char, 256>(std::string_view(VK_STD_VULKAN_VIDEO_CODEC_H264_DECODE_EXTENSION_NAME)),
+				.specVersion = 1,
+			};
+
+			const auto formats = _physicalDevice.getVideoFormatPropertiesKHR({
+				.pNext = &list,
+				.imageUsage = vk::ImageUsageFlagBits::eVideoDecodeDstKHR,
+			}, _loader);
+
+			{
+				const auto len = formats.size();
+				util::println("formats {}", len);
+				for(const auto f : formats)
+				{
+					const auto n = static_cast<uint32_t>(f.format);
+					util::println("  {}", n);
+				}
+			}
+
+			_videoFormat = formats.front().format;
+
+			_videoSession = _device.createVideoSessionKHR({
+				.queueFamilyIndex = _queueFamilyIndex,
+				.pVideoProfile = &h264profile,
+				.pictureFormat = _videoFormat,
+				.maxCodedExtent = {3840, 2160},
+				.pStdHeaderVersion = &h264Prop,
+			}, nullptr, _loader);
+
+			const auto filepath = "Z:\\rendered\\C\\アイカツスターズ！_97_Bon Bon Voyage!_20180308_1080_1.mp4";
+			_media.setup(filepath);
+			_videoStreamIndex = _media.findStreams([](const auto& s){
+				return s.codecpar->codec_type == AVMEDIA_TYPE_VIDEO;
+			}).front();
+		}
 	}
 
 	void recordCommand(const vk::CommandBuffer& commandBuffer, const uint32_t currentIndex)
@@ -745,6 +846,9 @@ public:
 
 	void destroy()
 	{
+		_device.freeMemory(_videoBufferMemory);
+		_device.destroyBuffer(_videoBuffer);
+
 		_device.freeMemory(_blankViewUboMemory);
 		_device.destroyBuffer(_blankViewUboBuffer);
 
@@ -823,6 +927,15 @@ private:
 
 	vk::Buffer _blankViewUboBuffer;
 	vk::DeviceMemory _blankViewUboMemory;
+
+	// for each video
+	vk::VideoSessionKHR _videoSession;
+	vk::Buffer _videoBuffer;
+	vk::DeviceMemory _videoBufferMemory;
+
+	vk::Format _videoFormat;
+
+	vk::DispatchLoaderDynamic _loader;
 };
 
 }}} // daia::player::pipeline
