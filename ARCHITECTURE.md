@@ -10,6 +10,9 @@
 > `EmptyContent` added as the default role for a new pane;
 > playlist \u2192 video assignment deferred;
 > decoder ownership options compared by feature.
+>
+> **Change from rev 3:** Polymorphism decision recorded (\u2705 virtual base class / vtable);
+> render-blocking mechanism explained for Options A and B.
 
 ---
 
@@ -65,8 +68,11 @@ New roles can be added here as the application grows.
 
 ### `PaneContent` \u2014 shared interface contract
 
-Every concrete content type must provide **exactly these five operations**, regardless of whether
-polymorphism is realised as a virtual base class or a `std::variant`:
+Every concrete content type must provide **exactly these five operations**.
+
+> \u2705 **Decision:** `PaneContent` is a **virtual base class** (vtable dispatch).
+> `Pane` stores a `unique_ptr<PaneContent>`. New roles are added as new subclasses with
+> no changes to any existing call site.
 
 | Operation | Signature | Description |
 |---|---|---|
@@ -76,16 +82,9 @@ polymorphism is realised as a virtual base class or a `std::variant`:
 | `onAttach` | `void onAttach(GlobalTimeline&)` | Called when the content is seated in a pane; subscribe to shared state. |
 | `onDetach` | `void onDetach()` | Called before removal; unsubscribe and release borrowed references. |
 
-These five operations are the **contract** the rest of the system relies on.  
-How they are dispatched is an implementation detail:
-
-| Approach | Dispatch mechanism | Adding a new role |
-|---|---|---|
-| **Virtual base class** | vtable (indirect call per operation) | Add a new subclass; no changes to call sites |
-| **`std::variant`** | `std::visit` (switch over known types) | Add to the variant list; all `visit` sites must be updated |
-
-Both are valid. The virtual approach is more open-ended; the variant approach eliminates heap
-allocation and indirect calls at the cost of a closed type set.
+These five operations are the **contract** the rest of the system relies on,
+dispatched through a vtable (one indirect call per operation per frame per pane \u2014
+negligible overhead at typical pane counts).
 
 `Pane::setContent(\u2026)` calls `onDetach` on the old content and `onAttach` on the new one,
 then stores the new content.
@@ -289,9 +288,19 @@ VideoContent
 | Seek / play / pause controlled directly inside `tick` | \u2705 |
 | Reuse one decoder across multiple panes | \u274c |
 | Hot-swap decoder backend (e.g. swap FFmpeg for a hardware decoder) | \u274c (recompile required) |
-| Decode on a background thread isolated from the content | needs extra work |
+| Decode on a background thread isolated from the content | \u274c (needs an explicit async wrapper) |
 
-Best when: each pane always owns exactly one clip, and simplicity matters more than flexibility.
+**Why it blocks the render thread:**  
+`VideoContent::tick` calls the decoder **synchronously** on the main loop thread. FFmpeg
+operations \u2014 `av_seek_frame` (disk seek + codec flush/re-sync), `avcodec_send_packet`,
+and `avcodec_receive_frame` \u2014 can each take several milliseconds, especially on the
+first seek or at a non-keyframe position. Because `tick` must return before the render
+loop submits the frame to the GPU, the entire frame is delayed by however long the decode
+takes. At 60\u00a0fps the whole frame budget is only 16\u00a0ms; a single 10\u00a0ms decode stall
+causes a visible hitch.
+
+Best when: each pane always owns exactly one clip, and simplicity matters more than
+frame-rate stability.
 
 ---
 
@@ -319,9 +328,19 @@ VideoContent
 | Hot-swap decoder backend without touching `VideoContent` | \u2705 |
 | Unit-test `VideoContent` with a mock decoder | \u2705 |
 | Reuse one decoder across multiple panes | \u274c |
-| Offload decoding to a background thread | needs a wrapper / async adapter |
+| Offload decoding to a background thread | \u274c (needs a wrapper / async adapter) |
 
-Best when: decoder backends may change (hardware acceleration, custom codecs) and testability matters.
+**Why it blocks the render thread:**  
+The `VideoDecoder` interface abstracts *which* decoder runs, but not *which thread* calls
+it. `VideoContent::tick` still calls `decoder->decodeFrameAt(seconds)` **synchronously**,
+so the render thread blocks waiting for the virtual call to return. The concrete
+implementation (`FfmpegDecoder::decodeFrameAt`) performs the same slow FFmpeg operations as
+Option A \u2014 seek, packet read, decode \u2014 just behind an interface boundary. The
+interface adds no concurrency by itself; making it non-blocking would require an explicit
+async wrapper (e.g. running decode on a `std::thread` and returning a `std::future<Frame>`).
+
+Best when: decoder backends may change (hardware acceleration, custom codecs) and
+testability matters, but frame-rate stability is handled at a higher level.
 
 ---
 
@@ -386,9 +405,8 @@ Pipeline::draw()
 
 ## Open Questions
 
-1. **`PaneContent` polymorphism** \u2014 virtual base class or `std::variant`?  The shared interface
-   contract (5 operations above) is the same either way; only dispatch and extensibility differ.
-   See the comparison table in the `PaneContent` section.
+1. **`PaneContent` polymorphism** \u2014 \u2705 **Decided: virtual base class (vtable).**
+   `Pane` stores a `unique_ptr<PaneContent>`; new roles are new subclasses.
 2. **Decoder ownership** \u2014 Option A (embedded), B (interface), or C (thread-pool)?
    See the Decoder Ownership section for a feature comparison.
 3. **Resize / reflow** \u2014 When a pane is split or removed, do adjacent panes expand to fill the
