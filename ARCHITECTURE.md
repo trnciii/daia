@@ -16,6 +16,9 @@
 >
 > **Change from rev 4:** Cumulative blocking for Options A and B clarified
 > (stall time scales linearly with the number of simultaneously playing panes).
+>
+> **Change from rev 5:** Decoder ownership decision recorded
+> (\u2705 Option C \u2014 shared `DecoderPool` in `PaneManager`); class hierarchy, `VideoContent`, `PaneManager`, and files list updated.
 
 ---
 
@@ -46,6 +49,7 @@ App
  \u251c\u2500\u2500 Pipeline                    (Vulkan, already exists)
  \u2514\u2500\u2500 PaneManager                 (new \u2013 owns everything below)
       \u251c\u2500\u2500 GlobalTimeline          (new \u2013 shared timeline for synced video panes)
+      \u251c\u2500\u2500 DecoderPool             (new \u2013 worker threads; VideoContent holds a handle)
       \u2514\u2500\u2500 Pane[]                  (new \u2013 one per screen region)
            \u2514\u2500\u2500 PaneContent        (new \u2013 swappable role, one of:)
                 \u251c\u2500\u2500 EmptyContent        role = Empty          (default)
@@ -122,18 +126,20 @@ Holds everything needed to play one video clip.
 | `playMode` | `PlayMode` | `Synced` or `Independent` |
 | `localTimeline` | `LocalTimeline` | always present; active only in Independent mode |
 | `globalTimeline*` | `GlobalTimeline*` | borrowed reference; non-null while attached |
-| `decoder` | *(see Decoder Ownership section)* | owned or borrowed; decodes frames |
+| `decoderHandle` | `DecoderPool::Handle` | opaque ticket into the `DecoderPool`; acquired on `loadVideo`, released on `onDetach` |
 
 Key operations:
-- `loadVideo(VideoSource)` \u2014 stores metadata, updates local timeline duration.
+- `loadVideo(VideoSource)` \u2014 stores metadata, updates local timeline duration, acquires a `DecoderPool::Handle`.
 - `setPlayMode(PlayMode)` \u2014 switches between Synced and Independent.  Subscribes to /
   unsubscribes from `GlobalTimeline` accordingly.  Carries current position across so there is no jump.
-- `tick(dt)` \u2014 advances `LocalTimeline` in Independent mode; no-op in Synced mode.
+- `tick(dt)` \u2014 advances `LocalTimeline` in Independent mode; in Synced mode calls
+  `DecoderPool::requestFrame(handle, position)` to post the next decode job (non-blocking).
+  Calls `DecoderPool::latestFrame(handle)` to retrieve the most recently decoded frame.
 - `currentPlaybackState()` \u2014 delegates to the active timeline.
 
 Lifecycle:
 - `onAttach` \u2192 subscribes to `GlobalTimeline` (default: Synced).
-- `onDetach` \u2192 unsubscribes from `GlobalTimeline`.
+- `onDetach` \u2192 unsubscribes from `GlobalTimeline`; releases `DecoderPool::Handle`.
 
 ---
 
@@ -257,6 +263,7 @@ The single owner of all panes and the global timeline.
 | `tick(\u0394t)` | Ticks `GlobalTimeline` first, then every `Pane`. |
 | `buildViewportSet()` | Collects viewports from all panes for the `Pipeline`. |
 | `refreshGlobalDuration()` | Scans synced `VideoContent` panes; updates `GlobalTimeline` duration. |
+| `decoderPool()` | Returns a reference to the shared `DecoderPool` (passed to `VideoContent` on attach). |
 
 ---
 
@@ -366,14 +373,18 @@ PaneManager
 VideoContent              (holds a handle / ticket into the pool)
 ```
 
+> \u2705 **Decision: Option C chosen.**
+> `DecoderPool` is owned by `PaneManager`. Each `VideoContent` holds an opaque handle
+> acquired from the pool. The render thread never blocks on decode.
+
 `DecoderPool` public surface:
 
 | Method | Description |
 |---|---|
-| `acquire(VideoSource) \u2192 handle` | Allocates a decoder worker for a clip; returns an opaque handle. |
-| `release(handle)` | Returns the worker to the pool. |
-| `requestFrame(handle, seconds)` | Posts an async decode request. |
-| `latestFrame(handle) \u2192 Frame` | Returns the most recently decoded frame (non-blocking). |
+| `acquire(VideoSource) \u2192 Handle` | Allocates a decoder worker for a clip; returns an opaque handle. |
+| `release(Handle)` | Returns the worker to the pool. |
+| `requestFrame(Handle, seconds)` | Posts an async decode request (non-blocking). |
+| `latestFrame(Handle) \u2192 optional<Frame>` | Returns the most recently decoded frame, or empty if not ready yet (non-blocking). |
 
 | Feature | Available? |
 |---|---|
@@ -420,12 +431,14 @@ Pipeline::draw()
 
 1. **`PaneContent` polymorphism** \u2014 \u2705 **Decided: virtual base class (vtable).**
    `Pane` stores a `unique_ptr<PaneContent>`; new roles are new subclasses.
-2. **Decoder ownership** \u2014 Option A (embedded), B (interface), or C (thread-pool)?
-   See the Decoder Ownership section for a feature comparison.
+2. **Decoder ownership** \u2014 \u2705 **Decided: Option C (shared `DecoderPool` in `PaneManager`).**
+   Render thread never blocks; stall time does not scale with pane count.
 3. **Resize / reflow** \u2014 When a pane is split or removed, do adjacent panes expand to fill the
    gap (tmux style) or leave blank space?
-4. **Frame-accurate seeking** \u2014 `GlobalTimeline` notifies via callbacks.  Is that enough, or do
-   decoders need a dedicated seek queue to avoid stalling the render thread?
+4. **Frame-accurate seeking** \u2014 With Option C the render thread never stalls on decode.
+   However, `GlobalTimeline` notifies panes via callbacks, which call `requestFrame` on the
+   pool. Is posting one request per callback sufficient, or do rapid seeks need a dedicated
+   command queue to avoid flooding the pool with stale jobs?
 5. **Maximum pane count** \u2014 The existing `ViewportSet::BlankUboData` has a hard limit of 8 slots.
    Should this become dynamic?
 6. **Playlist \u2192 Video assignment** \u2014 When a `PlaylistContent` pane activates a clip, how does
@@ -441,7 +454,7 @@ Pipeline::draw()
 | `src/player/pane_content.hpp` | `PaneRole`, `PaneContent` interface |
 | `src/player/empty_content.hpp` | `EmptyContent` (default role) |
 | `src/player/video_content.hpp` | `VideoSource`, `PlayMode`, `VideoContent` |
-| `src/player/video_decoder.hpp` | `VideoDecoder` interface (if Option B or C) |
+| `src/player/decoder_pool.hpp` | `DecoderPool`, `DecoderPool::Handle`, `Frame` |
 | `src/player/timeline_content.hpp` | `TimelineContent` |
 | `src/player/playlist_content.hpp` | `PlaylistContent` (future) |
 | `src/player/pane.hpp` | `Pane` |
