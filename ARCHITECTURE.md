@@ -13,6 +13,9 @@
 >
 > **Change from rev 3:** Polymorphism decision recorded (\u2705 virtual base class / vtable);
 > render-blocking mechanism explained for Options A and B.
+>
+> **Change from rev 4:** Cumulative blocking for Options A and B clarified
+> (stall time scales linearly with the number of simultaneously playing panes).
 
 ---
 
@@ -290,16 +293,21 @@ VideoContent
 | Hot-swap decoder backend (e.g. swap FFmpeg for a hardware decoder) | \u274c (recompile required) |
 | Decode on a background thread isolated from the content | \u274c (needs an explicit async wrapper) |
 
-**Why it blocks the render thread:**  
+**Why it blocks the render thread — and gets worse with more panes:**  
 `VideoContent::tick` calls the decoder **synchronously** on the main loop thread. FFmpeg
 operations \u2014 `av_seek_frame` (disk seek + codec flush/re-sync), `avcodec_send_packet`,
 and `avcodec_receive_frame` \u2014 can each take several milliseconds, especially on the
 first seek or at a non-keyframe position. Because `tick` must return before the render
 loop submits the frame to the GPU, the entire frame is delayed by however long the decode
-takes. At 60\u00a0fps the whole frame budget is only 16\u00a0ms; a single 10\u00a0ms decode stall
-causes a visible hitch.
+takes.
 
-Best when: each pane always owns exactly one clip, and simplicity matters more than
+**Cumulative effect:** `PaneManager::tick` calls every pane's `tick` in sequence. With
+N video panes each taking ~T\u00a0ms to decode, the render thread stalls for roughly
+**N \u00d7 T\u00a0ms** before it can draw anything. At 60\u00a0fps the whole frame budget is
+only 16\u00a0ms, so even two panes at 10\u00a0ms each (20\u00a0ms total) already miss the
+deadline. The more videos play simultaneously, the worse the delay.
+
+Best when: only one video pane is active at a time, and simplicity matters more than
 frame-rate stability.
 
 ---
@@ -330,17 +338,22 @@ VideoContent
 | Reuse one decoder across multiple panes | \u274c |
 | Offload decoding to a background thread | \u274c (needs a wrapper / async adapter) |
 
-**Why it blocks the render thread:**  
+**Why it blocks the render thread — and gets worse with more panes:**  
 The `VideoDecoder` interface abstracts *which* decoder runs, but not *which thread* calls
 it. `VideoContent::tick` still calls `decoder->decodeFrameAt(seconds)` **synchronously**,
 so the render thread blocks waiting for the virtual call to return. The concrete
-implementation (`FfmpegDecoder::decodeFrameAt`) performs the same slow FFmpeg operations as
-Option A \u2014 seek, packet read, decode \u2014 just behind an interface boundary. The
-interface adds no concurrency by itself; making it non-blocking would require an explicit
-async wrapper (e.g. running decode on a `std::thread` and returning a `std::future<Frame>`).
+implementation performs the same slow FFmpeg operations as Option A \u2014 seek, packet
+read, decode \u2014 just behind an interface boundary.
+
+**Cumulative effect:** Same as Option A. `PaneManager::tick` iterates over every pane
+sequentially, so the total render-thread stall per frame is **N \u00d7 T\u00a0ms** where N
+is the number of simultaneously playing video panes and T is the per-pane decode time.
+The more videos play at the same time, the longer each frame takes to start rendering.
+The interface layer adds no concurrency; making it non-blocking would require an explicit
+async wrapper (e.g. `std::thread` + `std::future<Frame>`).
 
 Best when: decoder backends may change (hardware acceleration, custom codecs) and
-testability matters, but frame-rate stability is handled at a higher level.
+testability matters, but the number of simultaneous video panes stays low.
 
 ---
 
