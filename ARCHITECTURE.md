@@ -19,6 +19,9 @@
 >
 > **Change from rev 5:** Decoder ownership decision recorded
 > (\u2705 Option C \u2014 shared `DecoderPool` in `PaneManager`); class hierarchy, `VideoContent`, `PaneManager`, and files list updated.
+>
+> **Change from rev 6:** Recommended build order added
+> (video render-pass spike first, then pane system, then full integration).
 
 ---
 
@@ -424,6 +427,76 @@ PaneManager::buildViewportSet()
 Pipeline::draw()
      \u2514\u2500\u2500 for each pane: set Vulkan viewport/scissor, dispatch draw calls
 ```
+
+---
+
+## Recommended Build Order
+
+> **Recommendation: build the video render-pass spike first**, then layer the pane system on top.
+
+### Why not pane system first?
+
+The viewport layout machinery is already partially working \u2014 `ViewportSet` and the existing
+Vulkan pipeline can already divide the screen into coloured rectangles. That part of the
+system carries **low implementation risk**.
+
+The unknown risk is the **video decode \u2192 GPU texture upload path**: integrating FFmpeg,
+uploading YUV frames to a Vulkan image, writing the colour-conversion shader (or using a
+pre-built one), and handling image layout transitions. This is where the real iteration
+will happen, and it is easiest to tackle in isolation before the pane complexity is added.
+
+### Proposed stages
+
+#### Stage 1 \u2014 Video render-pass spike (single full-screen video)
+
+Goal: get one video playing on screen as fast as possible.
+
+| Task | Notes |
+|---|---|
+| Integrate FFmpeg (or equivalent) | Open a file, decode frames, expose raw pixel data |
+| Upload a decoded frame as a Vulkan texture | `VkImage` + `VkImageView` + staging buffer or host-visible memory |
+| Write a fragment shader that samples the texture | Start with RGB; add YUV\u2192RGB conversion if needed |
+| Wire `LocalTimeline` tick \u2192 `requestFrame` \u2192 texture upload | Single-threaded first (Option A style) just to prove the picture |
+| Verify: video plays full-screen in a loop | Accept drop frames; quality and threading come later |
+
+This stage deliberately ignores `PaneManager`, `DecoderPool`, and the pane interface.
+The decoder lives directly in the render loop for now.
+
+#### Stage 2 \u2014 Async decoder (`DecoderPool`)
+
+Goal: move decoding off the main thread before adding pane complexity.
+
+| Task | Notes |
+|---|---|
+| Implement `DecoderPool` with one worker thread | `requestFrame` posts a job; `latestFrame` returns the last ready frame |
+| Replace the Stage\u00a01 synchronous decode call with pool calls | Render thread posts, polls, uploads \u2014 never blocks |
+| Verify: playback stays smooth under scrubbing / seeks | This is the payoff from choosing Option C |
+
+#### Stage 3 \u2014 Pane system
+
+Goal: generalise from "one full-screen video" to "N tiled panes each with a swappable role".
+
+| Task | Notes |
+|---|---|
+| Implement `PaneContent` virtual base + `EmptyContent` | Minimal: `tick`, `render`, `onAttach`, `onDetach` |
+| Implement `Pane` and `PaneManager` | Layout, `addPane`, `splitPane`, `removePane`, `buildViewportSet` |
+| Port Stage\u00a02 video logic into `VideoContent` | Wraps `DecoderPool::Handle` + `LocalTimeline` |
+| Wire `App` to `PaneManager` | Replace the hardcoded Stage\u00a01 loop |
+| Verify: two video panes, each playing independently | Proves the tiling and role-swap mechanism |
+
+#### Stage 4 \u2014 Synced playback & timeline UI
+
+Goal: frame-accurate comparison across multiple video panes.
+
+| Task | Notes |
+|---|---|
+| Implement `GlobalTimeline` + subscription API | One instance in `PaneManager`; drives synced `VideoContent` panes |
+| Implement `TimelineContent` | Renders scrubber, play/pause, speed controls in a dedicated pane |
+| Test synced seek across two video panes | Both panes should jump to the same frame simultaneously |
+
+#### Stage 5 \u2014 Remaining features
+
+Playlist, config UI, reflow on split/remove, dynamic pane count \u2014 as needed.
 
 ---
 
