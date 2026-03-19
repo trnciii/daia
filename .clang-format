@@ -1,6 +1,7 @@
 ColumnLimit: 0
 IndentWidth: 2
 ContinuationIndentWidth: 2
+ConstructorInitializerIndentWidth: 2
 
 BinPackArguments: false
 BinPackParameters: false

@@ -1,6 +1,14 @@
 
 find_package(glfw3 3.3 REQUIRED)
 find_package(Vulkan REQUIRED)
+find_package(PkgConfig REQUIRED)
+
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+  libavformat
+  libavcodec
+  libswscale
+  libavutil
+)
 
 add_library(player_core INTERFACE)
 
@@ -8,6 +16,7 @@ target_link_libraries(player_core
 	INTERFACE
 		Vulkan::Vulkan
 		glfw
+		PkgConfig::FFMPEG
 )
 
 target_include_directories(player_core

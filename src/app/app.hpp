@@ -18,9 +18,9 @@ public:
     _appRoot = appPath.parent_path();
   }
 
-  void run()
+  void run(const std::vector<std::filesystem::path>& filePath)
   {
-    _setup();
+    _setup(filePath);
 
     while (!_window.shouldClose())
     {
@@ -43,13 +43,24 @@ private:
 
   std::chrono::steady_clock::time_point _startTime = std::chrono::steady_clock::now();
 
-  void _setup()
+  void _setup(const std::vector<std::filesystem::path>& filePaths)
   {
     // set app name, width, height
 
     _setupWindow();
     _setupPipeline(_window.getRequiredInstanceExtensions());
-    _pipeline.registerContent("default", std::make_shared<player::content::EmptyContent>(_width, _height));
+
+    if (filePaths.empty())
+    {
+      _pipeline.registerContent("default", std::make_shared<player::content::EmptyContent>(_width, _height));
+    }
+    else
+    {
+      for (const auto& path : filePaths)
+      {
+        _pipeline.registerContent(path.string(), std::make_shared<player::content::VideoContent>(path));
+      }
+    }
   }
 
   void _setupWindow()

@@ -25,12 +25,13 @@ struct UpdateArgs
 class Content
 {
 public:
+  virtual const std::string type_name() const = 0;
   virtual ~Content() = default;
   virtual void setup(const SetupArgs info) = 0;
   virtual void destroy() = 0;
   virtual bool update(const UpdateArgs info) = 0;
   virtual util::uint2 size() const = 0;
-  virtual std::span<const uint32_t> data() const = 0;
+  virtual std::span<const uint32_t> buffer() const = 0;
 };
 
 }}} // namespace daia::player::content

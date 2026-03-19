@@ -1,5 +1,12 @@
 add_executable(daia main.cpp)
 
+target_include_directories(daia
+	PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}
+		../../external/cli11/include
+)
+
+
 target_link_libraries(daia
   PRIVATE
     player_core

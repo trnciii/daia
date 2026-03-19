@@ -657,7 +657,8 @@ public:
 
         _device->bindBufferMemory(*stagingBuffer, *stagingMemory, 0);
         void* mapped = _device->mapMemory(*stagingMemory, 0, size);
-        memcpy(mapped, content->data().data(), size);
+        assert(content->buffer().size() * sizeof(uint32_t) == size);
+        memcpy(mapped, content->buffer().data(), size);
         _device->unmapMemory(*stagingMemory);
 
         commandBuffer.pipelineBarrier(
@@ -727,12 +728,14 @@ public:
     commandBuffer.reset();
   }
 
-  bool registerContent(std::string key, std::shared_ptr<content::Content> content)
+  bool registerContent(const std::string& key, std::shared_ptr<content::Content> content)
   {
     if (_contents.contains(key))
     {
       return false;
     }
+
+    util::println("register {}: {}", content->type_name(), key);
 
     content->setup({
       .device = _device,
@@ -766,6 +769,7 @@ public:
   {
     if (auto it = _contents.find(key); it != _contents.end())
     {
+      util::println("unregister content: {}", key);
       it->second.content->destroy();
       it->second.texture.destroy();
       _contents.erase(it);
@@ -774,6 +778,7 @@ public:
 
   void unregisterAllContents()
   {
+    util::println("clear contents: ({})", _contents.size());
     for (auto& [_, t] : _contents)
     {
       t.content->destroy();

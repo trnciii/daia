@@ -1,0 +1,8 @@
+If:
+  PathMatch: .*
+
+CompileFlags:
+  Add:
+    - -Iexternal/cli11/include
+    - -Iexternal/stb
+  CompilationDatabase: build

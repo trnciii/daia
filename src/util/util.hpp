@@ -6,7 +6,13 @@
 #include <iostream>
 #include <ranges>
 #include <string>
-#include <utility>
+#include <string_view>
+#include <typeinfo>
+
+#ifdef __GNUG__
+#include <cxxabi.h>
+#include <memory>
+#endif
 
 namespace daia { namespace util {
 
@@ -22,14 +28,14 @@ using int2 = std::array<int, 2>;
 using int3 = std::array<int, 3>;
 using int4 = std::array<int, 4>;
 
-inline void print(const std::string& string)
+inline void print(std::string_view string)
 {
   std::cout << string;
 }
 
-inline void println(const std::string& string)
+inline void println(std::string_view string)
 {
-  std::cout << string << std::endl;
+  std::cout << string << '\n';
 }
 
 inline void flush()
@@ -38,15 +44,21 @@ inline void flush()
 }
 
 template <typename... Args>
-void print(const std::string& f, Args&&... args)
+std::string format(std::string_view f, Args&&... args)
 {
-  print(std::vformat(f, std::make_format_args(std::forward<Args>(args)...)));
+  return std::vformat(f, std::make_format_args(args...));
 }
 
 template <typename... Args>
-void println(const std::string& f, Args&&... args)
+void print(std::string_view f, Args&&... args)
 {
-  println(std::vformat(f, std::make_format_args(std::forward<Args>(args)...)));
+  print(std::vformat(f, std::make_format_args(args...)));
+}
+
+template <typename... Args>
+void println(std::string_view f, Args&&... args)
+{
+  println(std::vformat(f, std::make_format_args(args...)));
 }
 
 template <std::ranges::range T>
@@ -69,6 +81,21 @@ static std::string readAllText(const std::filesystem::path& path)
   file.read(text.data(), size);
   file.close();
   return text;
+}
+
+template <typename T>
+std::string get_type_name()
+{
+#ifdef __GNUG__
+  int status = 0;
+  std::unique_ptr<char, void (*)(void*)> res{
+    abi::__cxa_demangle(typeid(T).name(), nullptr, nullptr, &status),
+    std::free
+  };
+  return (status == 0) ? res.get() : typeid(T).name();
+#else
+  return typeid(obj).name();
+#endif
 }
 
 }} // namespace daia::util

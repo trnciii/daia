@@ -7,6 +7,11 @@ namespace daia { namespace player { namespace content {
 class EmptyContent : public Content
 {
 public:
+  const std::string type_name() const
+  {
+    return util::get_type_name<EmptyContent>();
+  }
+
   void setup(const SetupArgs info) {}
 
   void destroy() {}
@@ -26,7 +31,7 @@ public:
     return true;
   }
 
-  std::span<const uint32_t> data() const
+  std::span<const uint32_t> buffer() const
   {
     return _data;
   }
