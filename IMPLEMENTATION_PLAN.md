@@ -1,6 +1,6 @@
 # DAIA Implementation Plan
 
-> Last updated: 2026-03-17 (Session 10)
+> Last updated: 2026-03-18 (Session 10)
 > 
 > This document tracks the multi-phase implementation plan for Content-based rendering with Pane management.
 > 
@@ -78,7 +78,7 @@ Content (abstract)
 ### Current Status
 - [x] Step 0: Texture struct ✅ (player/texture.hpp)
 - [x] Step 1: CMakeLists.txt FFmpeg linking ✅（※実際は未リンク、Step 5a で修正）
-- [x] Step 2: Content base class + EmptyContent ✅ (player/content/content.hpp)
+- [x] Step 2: Content base class + EmptyContent ✅ (player/content/{content_base,empty_content,content}.hpp)
 - [x] Step 3: Pipeline content management ✅ (registerContent/unregisterContent/update)
 - [x] Step 3a: Staging buffer upload ✅ (Pipeline::update() 内)
 - [x] Step 3b: Sampler descriptor binding ✅ (binding 1 = CombinedImageSampler)
@@ -423,25 +423,29 @@ class VideoContent : public Content {
 ```
 src/
 ├── app/
-│   ├── app.hpp              (App lifecycle)
+│   ├── app.hpp              (App lifecycle - daia::app)
+│   ├── CMakeLists.txt
+│   ├── icon.png
 │   └── main.cpp             (エントリポイント)
 ├── player/
 │   ├── pipeline/
-│   │   ├── pipeline.hpp     (Pipeline 本体 - daia::player::pipeline)
+│   │   ├── pipeline.hpp     (Pipeline, SetupArgs, WrappedContent - daia::player::pipeline)
 │   │   ├── viewport.hpp     (ViewportSet, PushConstant 等)
-│   │   └── helpers.hpp      (checkLayers, debug, shader ヘルパー)
+│   │   ├── helpers.hpp      (checkLayers, debug, shader ヘルパー)
+│   │   └── shader/
+│   │       ├── pane.vert
+│   │       └── pane.frag
 │   ├── common/
 │   │   ├── util.hpp         (findMemoryType - daia::player::common)
 │   │   └── texture.hpp      (Texture - daia::player::common)
 │   ├── media/
 │   │   └── video.hpp        (Video - daia::player::media)
 │   ├── content/
-│   │   ├── content.hpp      (Content base class + EmptyContent)
+│   │   ├── content.hpp      (集約ヘッダ: content_base + empty_content)
+│   │   ├── content_base.hpp (Content base, SetupArgs, UpdateArgs - daia::player::content)
+│   │   ├── empty_content.hpp(EmptyContent - daia::player::content)
 │   │   └── video_content.hpp [TODO: Step 5c]
-│   ├── window.hpp           (Window, SetupInfo - daia::player::window)
-│   ├── shader/
-│   │   ├── triangle.{vert,frag}  (Current default)
-│   │   └── video.{vert,frag}     [TODO: Phase B]
+│   ├── window.hpp           (Window, Window::SetupInfo nested - daia::player)
 │   └── CMakeLists.txt
 └── util/
     ├── util.hpp             (float2/uint2 型エイリアス等)
@@ -713,6 +717,25 @@ src/
 - Window は namespace 変更のみ（隠すクラスがない）
 - video.hpp はクラス名 `Video` のまま、audio 対応時に再検討
 - CMake 粒度は変更なし（`player_core` INTERFACE のまま）
+- `content_base.hpp` を採用（`content_interface.hpp` ではなく。将来デフォルト実装追加の余地）
+- ファイル命名規則は snake_case に統一
+
+6. content.hpp 分割
+   - `content_base.hpp`: Content base class, SetupArgs, UpdateArgs（`daia::player::content`）
+   - `empty_content.hpp`: EmptyContent（`daia::player::content`）
+   - `content.hpp`: 集約ヘッダ（上記 2 ファイルを include するだけ）
+   - `pipeline.hpp` は `content_base.hpp` のみ include（具象クラス不要）
+   - `app.hpp` は `content/content.hpp`（集約）を include
+7. shader リネーム
+   - `triangle.{vert,frag}` → `blit.{vert,frag}` → `pane.{vert,frag}`（UI content でも使うため）
+   - shader ディレクトリを `player/shader/` → `player/pipeline/shader/` に移動
+   - CMakeLists.txt のパスを更新
+8. ファイル命名規則統一
+   - `emptyContent.hpp` → `empty_content.hpp`（snake_case に統一）
+9. ユーザーによる手動変更（namespace 整理）
+   - `app.hpp`: namespace `daia::player` → `daia::app`
+   - `window.hpp`: namespace `daia::player::window` → `daia::player`、`SetupInfo` を `Window::SetupInfo` にネスト
+   - `Pipeline::SetupInfo` → `pipeline::SetupArgs` にリネーム（namespace スコープへ移動）
 
 **Remaining**: Step 5b 以降は前回から変更なし
 
