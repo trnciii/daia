@@ -1,0 +1,7 @@
+If:
+  PathMatch: .*
+
+CompileFlags:
+  Add:
+    - --include-directory=external/cli11/include
+    - --include-directory=external/stb
