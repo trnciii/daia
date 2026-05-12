@@ -1,23 +1,26 @@
-add_executable(daia main.cpp)
+add_executable(app main.cpp)
 
-target_include_directories(daia
-	PRIVATE
-		${CMAKE_CURRENT_SOURCE_DIR}
-		../../external/cli11/include
+set_target_properties(app PROPERTIES
+  OUTPUT_NAME daia
 )
 
-
-target_link_libraries(daia
+target_include_directories(app
   PRIVATE
-    player_core
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ../../external/cli11/include
 )
 
-add_dependencies(daia compile_shaders)
+target_link_libraries(app
+  PRIVATE
+    player
+)
+
+add_dependencies(app compile_shaders)
 
 add_custom_command(
-  TARGET daia POST_BUILD
+  TARGET app POST_BUILD
   COMMAND
     ${CMAKE_COMMAND} -E copy
     ${CMAKE_CURRENT_SOURCE_DIR}/icon.png
-    $<TARGET_FILE_DIR:daia>/icon.png
+    $<TARGET_FILE_DIR:app>/icon.png
 )
